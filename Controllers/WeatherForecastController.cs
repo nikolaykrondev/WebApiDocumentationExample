@@ -1,7 +1,11 @@
 using Microsoft.AspNetCore.Mvc;
+using Swashbuckle.AspNetCore.Annotations;
 
 namespace WebApiDocumentationExample.Controllers;
 
+/// <summary>
+/// Weather Forecasts
+/// </summary>
 [ApiController]
 [Route("[controller]")]
 public class WeatherForecastController : ControllerBase
@@ -13,12 +17,24 @@ public class WeatherForecastController : ControllerBase
 
     private readonly ILogger<WeatherForecastController> _logger;
 
+    /// <inheritdoc />
     public WeatherForecastController(ILogger<WeatherForecastController> logger)
     {
         _logger = logger;
     }
 
+    /// <summary>
+    /// Get Weather Forecasts
+    /// </summary>
+    /// <remarks>This is a remark comment</remarks>
+    /// <returns>Returns 5 random weather forecasts</returns>
+    /// <response code="200">Returns the weather forecasts</response>
     [HttpGet(Name = "GetWeatherForecast")]
+    [SwaggerOperation(Summary = "Get weather forecasts",
+        Description = "Returns 5 random weather forecasts",
+        OperationId = "GET",
+        Tags = new []{"WeatherForecast"})]
+    [SwaggerResponse(StatusCodes.Status200OK, "Random weather forecasts", typeof(WeatherForecast[]))]
     public IEnumerable<WeatherForecast> Get()
     {
         return Enumerable.Range(1, 5).Select(index => new WeatherForecast
