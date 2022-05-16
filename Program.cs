@@ -1,4 +1,6 @@
 using System.Reflection;
+using Microsoft.OpenApi.Any;
+using Microsoft.OpenApi.Interfaces;
 using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -20,6 +22,16 @@ builder.Services.AddSwaggerGen(options =>
             {
                 Name = "Nikolay Krondev",
                 Email = "email@example.com"
+            },
+            // ReDoc logo
+            Extensions = new Dictionary<string, IOpenApiExtension>
+            {
+                {"x-logo", new OpenApiObject
+                    {
+                        {"url", new OpenApiString("https://avatars.githubusercontent.com/u/5111043?v=4")},
+                        { "altText", new OpenApiString("Some cool logo")}
+                    }
+                }
             }
         });
     

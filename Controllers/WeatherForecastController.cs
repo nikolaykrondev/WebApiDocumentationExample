@@ -8,6 +8,7 @@ namespace WebApiDocumentationExample.Controllers;
 /// </summary>
 [ApiController]
 [Route("[controller]")]
+[SwaggerTag("Weather Forecasts tag example")]
 public class WeatherForecastController : ControllerBase
 {
     private static readonly string[] Summaries = new[]
@@ -45,4 +46,31 @@ public class WeatherForecastController : ControllerBase
             })
             .ToArray();
     }
+
+    /// <summary>
+    /// Create Weather Record
+    /// </summary>
+    /// <remarks>This is a remark comment</remarks>
+    /// <returns>Weather record</returns>
+    /// <response code="200">Returns the weather record</response>
+    [HttpPost(Name = "AddWeather")]
+    [SwaggerOperation(Summary = "Add a new weather record",
+        Description = "Add a new weather record",
+        OperationId = "AddWeather",
+        Tags = new []{"Weather"})]
+    [SwaggerResponse(StatusCodes.Status200OK, "Weather record", typeof(Weather))]
+    public ActionResult<Weather> AddWeather(
+        [FromBody, SwaggerRequestBody("The weather payload", Required = true)]Weather weather)
+    {
+        return Ok(weather);
+    }
 }
+
+
+/// <summary>
+/// Weather record
+/// </summary>
+/// <param name="Id">Weather internal id</param>
+/// <param name="Name">Weather city name</param>
+/// <param name="Description">Optional weather description</param>
+public record struct Weather(int Id, string Name, string? Description);
