@@ -30,6 +30,12 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI(options => options.SwaggerEndpoint("/swagger/v1/swagger.json", "Swagger Weather Demo Documentation v1"));
+    
+    app.UseReDoc(options => // adds default url to https://your-host-and-port/api-docs/
+    {
+        options.DocumentTitle = "Swagger Weather Demo Documentation";
+        options.SpecUrl = "/swagger/v1/swagger.json";
+    });
 }
 
 app.UseHttpsRedirection();
