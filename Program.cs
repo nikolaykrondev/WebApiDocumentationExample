@@ -1,13 +1,30 @@
 using System.Reflection;
+using System.Security.Claims;
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Authorization;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Any;
 using Microsoft.OpenApi.Interfaces;
 using Microsoft.OpenApi.Models;
+using WebApiDocumentationExample.Auth;
+using WebApiDocumentationExample.Controllers;
+using WebApiDocumentationExample.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 
-builder.Services.AddControllers();
+builder.Services.AddControllers(options =>
+{
+    var authPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+    options.Filters.Add(new AuthorizeFilter(authPolicy));
+});
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
@@ -40,6 +57,87 @@ builder.Services.AddSwaggerGen(options =>
     var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
     options.IncludeXmlComments(xmlPath);
     options.EnableAnnotations();
+
+
+
+
+// WORKING JWT BEARER:
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "JWT Authorization header using the Bearer scheme."
+    });
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
+
+builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddSingleton<JwtAuthenticationManager>();
+
+
+
+
+
+// WORKING JWT:
+builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+#if DEBUG
+        options.RequireHttpsMetadata = false;
+#else
+        options.RequireHttpsMetadata = true;
+#endif
+        options.SaveToken = true;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = "https://localhost:7098",
+            ValidAudience = "https://localhost:7098",
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration.GetSection("TokenSecret").Value))
+        };
+     });
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("OnlyAdmin", policy =>
+    {
+        policy.AuthenticationSchemes.Add(JwtBearerDefaults.AuthenticationScheme);
+        policy.RequireAuthenticatedUser();
+        policy.RequireRole(UserRoles.ADMIN.ToString());
+        // policy.Requirements.Add(new CustomRequirement());
+    });
+    options.AddPolicy("RegularUser", policy =>
+    {
+        policy.AuthenticationSchemes.Add(JwtBearerDefaults.AuthenticationScheme);
+        policy.RequireAuthenticatedUser();
+        policy.RequireAssertion(context => context.User.HasClaim(c => 
+            c.Type == ClaimTypes.Role 
+            && (c.Value == UserRoles.USER.ToString() || c.Value == UserRoles.ADMIN.ToString())));
+        // policy.RequireScope2(Scopes.SomeScope);
+    });
 });
 
 var app = builder.Build();
@@ -59,8 +157,35 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+app.MapPost("/authtoken", async ([FromBody]string request, IUserService userService, JwtAuthenticationManager jwtAuthenticationManager) =>
+{
+    //grant_type=password&username=admin&password=admin&client_id=stream&cookie_type=persistent
+    var query = QueryHelpers.ParseQuery(request);
+    var username = query.ContainsKey("username") ? query["username"].ToString() : string.Empty;
+    var password = query.ContainsKey("password") ? query["password"].ToString() : string.Empty;
+    var grant_type = query.ContainsKey("grant_type") ? query["grant_type"].ToString() : string.Empty;
+    var client_id = query.ContainsKey("client_id") ? query["client_id"].ToString() : string.Empty;
+    var cookie_type = query.ContainsKey("cookie_type") ? query["cookie_type"].ToString() : string.Empty;
+    
+    var (isValid, user) = userService.ValidateUser(username, password);
+    if (!isValid)
+    {
+        return Results.BadRequest("User was not found or wrong password");
+    }
+
+    return Results.Ok(new
+    {
+        access_token = jwtAuthenticationManager.Authenticate(user),
+        expires_in = jwtAuthenticationManager.GetTokenLifetime(),
+        refresh_token = string.Empty,
+        refresh_token_expires_in = 0,
+        token_type = "bearer"
+    });
+});
 
 app.Run();

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Swashbuckle.AspNetCore.Annotations;
 
@@ -6,6 +7,7 @@ namespace WebApiDocumentationExample.Controllers;
 /// <summary>
 /// Weather Forecasts
 /// </summary>
+[AllowAnonymous]
 [ApiController]
 [Route("[controller]")]
 [SwaggerTag("Weather Forecasts tag example")]
