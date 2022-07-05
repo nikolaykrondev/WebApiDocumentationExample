@@ -1,15 +1,18 @@
 using System.Reflection;
 using System.Security.Claims;
-using System.Text;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Authorization;
-using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Any;
 using Microsoft.OpenApi.Interfaces;
 using Microsoft.OpenApi.Models;
+using OpenIddict.Abstractions;
+using OpenIddict.Server.AspNetCore;
+using OpenIddict.Validation.AspNetCore;
+using WebApiDocumentationExample;
 using WebApiDocumentationExample.Auth;
 using WebApiDocumentationExample.Controllers;
 using WebApiDocumentationExample.Models;
@@ -20,7 +23,13 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers(options =>
 {
-    var authPolicy = new AuthorizationPolicyBuilder()
+    var authPolicy = new AuthorizationPolicyBuilder
+        {
+            // To validate tokens received by custom API endpoints, the OpenIddict validation handler
+            // (e.g OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme
+            //   or OpenIddictValidationOwinDefaults.AuthenticationType) must be used instead.
+            AuthenticationSchemes = new List<string>{ OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme }
+        }
         .RequireAuthenticatedUser()
         .Build();
     options.Filters.Add(new AuthorizeFilter(authPolicy));
@@ -58,7 +67,30 @@ builder.Services.AddSwaggerGen(options =>
     options.IncludeXmlComments(xmlPath);
     options.EnableAnnotations();
 
-
+// WORKING BASIC:    
+    // options.AddSecurityDefinition("basic", new OpenApiSecurityScheme  
+    // {  
+    //     Name = "Authorization",  
+    //     Type = SecuritySchemeType.Http,  
+    //     Scheme = "basic",  
+    //     In = ParameterLocation.Header,  
+    //     Description = "Basic Authorization header using the Bearer scheme."  
+    // });  
+    //
+    // options.AddSecurityRequirement(new OpenApiSecurityRequirement  
+    // {  
+    //     {  
+    //         new OpenApiSecurityScheme  
+    //         {  
+    //             Reference = new OpenApiReference  
+    //             {  
+    //                 Type = ReferenceType.SecurityScheme,  
+    //                 Id = "basic"  
+    //             }  
+    //         },  
+    //         new string[] {}  
+    //     }  
+    // }); 
 
 
 // WORKING JWT BEARER:
@@ -90,54 +122,74 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddSingleton<JwtAuthenticationManager>();
 
+// Basic:
+// builder.Services.AddAuthentication("BasicAuthentication")  
+//     .AddScheme<AuthenticationSchemeOptions, BasicAuthenticationHandler>("BasicAuthentication", null);
 
-
-
-
-// WORKING JWT:
-builder.Services.AddAuthentication(options =>
-    {
-        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-    })
-    .AddJwtBearer(options =>
-    {
-#if DEBUG
-        options.RequireHttpsMetadata = false;
-#else
-        options.RequireHttpsMetadata = true;
-#endif
-        options.SaveToken = true;
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = "https://localhost:7098",
-            ValidAudience = "https://localhost:7098",
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration.GetSection("TokenSecret").Value))
-        };
-     });
+builder.Services.AddAuthentication();
 
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("OnlyAdmin", policy =>
     {
-        policy.AuthenticationSchemes.Add(JwtBearerDefaults.AuthenticationScheme);
+        policy.AuthenticationSchemes.Add(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
         policy.RequireAuthenticatedUser();
         policy.RequireRole(UserRoles.ADMIN.ToString());
         // policy.Requirements.Add(new CustomRequirement());
     });
     options.AddPolicy("RegularUser", policy =>
     {
-        policy.AuthenticationSchemes.Add(JwtBearerDefaults.AuthenticationScheme);
+        policy.AuthenticationSchemes.Add(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
         policy.RequireAuthenticatedUser();
-        policy.RequireAssertion(context => context.User.HasClaim(c => 
-            c.Type == ClaimTypes.Role 
-            && (c.Value == UserRoles.USER.ToString() || c.Value == UserRoles.ADMIN.ToString())));
+        policy.RequireRole(UserRoles.USER.ToString(), UserRoles.ADMIN.ToString());
         // policy.RequireScope2(Scopes.SomeScope);
     });
+});
+
+builder.Services.AddDbContext<ApplicationDbContext>(options =>
+{
+    options
+        .UseInMemoryDatabase("AuthenticationExample")
+        .UseOpenIddict();
+});
+
+builder.Services.AddOpenIddict(openIddictBuilder =>
+{
+    openIddictBuilder.AddCore(options =>
+        {
+            options.UseEntityFrameworkCore()
+                 .UseDbContext<ApplicationDbContext>();
+        })
+        .AddServer(options =>
+        {
+            // Enable the token endpoint.
+            options.SetTokenEndpointUris("/authtoken");
+            
+            // Enable the client credentials and password flow.
+            options.AllowClientCredentialsFlow();
+            options.AllowPasswordFlow();
+#if DEBUG
+            // Register the signing and encryption credentials.
+            options.AddDevelopmentEncryptionCertificate()
+                .AddDevelopmentSigningCertificate();
+#else
+#endif
+            // Register the ASP.NET Core host and configure the ASP.NET Core options.
+            options.UseAspNetCore()
+                .EnableUserinfoEndpointPassthrough()
+                .EnableAuthorizationEndpointPassthrough()
+                .EnableTokenEndpointPassthrough();
+            
+        })
+
+        // Register the OpenIddict validation components.
+        .AddValidation(options =>
+        {
+            // Import the configuration from the local OpenIddict server instance.
+            options.UseLocalServer();
+            options.UseAspNetCore();
+        });
+
 });
 
 var app = builder.Build();
@@ -162,30 +214,73 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-app.MapPost("/authtoken", async ([FromBody]string request, IUserService userService, JwtAuthenticationManager jwtAuthenticationManager) =>
+app.MapPost("/authtoken",
+    async (HttpRequest httpRequest, IOpenIddictApplicationManager applicationManager,
+        IUserService userService, IAuthenticationSchemeProvider authenticationSchemeProvider) =>
 {
-    //grant_type=password&username=admin&password=admin&client_id=stream&cookie_type=persistent
-    var query = QueryHelpers.ParseQuery(request);
-    var username = query.ContainsKey("username") ? query["username"].ToString() : string.Empty;
-    var password = query.ContainsKey("password") ? query["password"].ToString() : string.Empty;
-    var grant_type = query.ContainsKey("grant_type") ? query["grant_type"].ToString() : string.Empty;
-    var client_id = query.ContainsKey("client_id") ? query["client_id"].ToString() : string.Empty;
-    var cookie_type = query.ContainsKey("cookie_type") ? query["cookie_type"].ToString() : string.Empty;
+    var schemes = await authenticationSchemeProvider.GetAllSchemesAsync();
     
-    var (isValid, user) = userService.ValidateUser(username, password);
+    var request = httpRequest.HttpContext.GetOpenIddictServerRequest();
+    if (!request.IsClientCredentialsGrantType() && !request.IsPasswordGrantType())
+    {
+        throw new NotImplementedException("The specified grant is not implemented.");
+    }
+
+    var (isValid, user) = userService.ValidateUser(request.Username, request.Password);
     if (!isValid)
     {
         return Results.BadRequest("User was not found or wrong password");
     }
 
-    return Results.Ok(new
-    {
-        access_token = jwtAuthenticationManager.Authenticate(user),
-        expires_in = jwtAuthenticationManager.GetTokenLifetime(),
-        refresh_token = string.Empty,
-        refresh_token_expires_in = 0,
-        token_type = "bearer"
-    });
+    var application = await applicationManager.FindByClientIdAsync(request.ClientId) ??
+                      throw new InvalidOperationException("The application cannot be found.");
+
+    var identity = new ClaimsIdentity(TokenValidationParameters.DefaultAuthenticationType, OpenIddictConstants.Claims.Name, OpenIddictConstants.Claims.Role);
+
+    identity.AddClaim(OpenIddictConstants.Claims.Subject,
+        await applicationManager.GetClientIdAsync(application),
+        OpenIddictConstants.Destinations.AccessToken, OpenIddictConstants.Destinations.IdentityToken);
+
+    identity.AddClaim(OpenIddictConstants.Claims.Name,
+        await applicationManager.GetDisplayNameAsync(application),
+        OpenIddictConstants.Destinations.AccessToken, OpenIddictConstants.Destinations.IdentityToken);
+
+    identity.AddClaim(OpenIddictConstants.Claims.Username, user.UserName,
+        OpenIddictConstants.Destinations.AccessToken, OpenIddictConstants.Destinations.IdentityToken);
+
+    identity.AddClaim(OpenIddictConstants.Claims.Role, user.Role.ToString(),
+        OpenIddictConstants.Destinations.AccessToken, OpenIddictConstants.Destinations.IdentityToken);
+
+    return Results.SignIn(new ClaimsPrincipal(identity),
+        properties: new AuthenticationProperties(),
+        authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme
+        );
 });
 
-app.Run();
+await ConfigureOAuthDatabase(app);
+
+await app.RunAsync();
+
+async Task ConfigureOAuthDatabase(IHost webApplication)
+{
+    await using var scope = webApplication.Services.CreateAsyncScope();
+    var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    await context.Database.EnsureCreatedAsync();
+    var manager = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+    const string clientId = "stream";
+    if (await manager.FindByClientIdAsync(clientId) is null)
+    {
+        await manager.CreateAsync(new OpenIddictApplicationDescriptor
+        {
+            ClientId = clientId,
+            //ClientSecret = "388D45FA-B36B-4988-BA59-B187D329C207",
+            DisplayName = "My client application",
+            Permissions =
+            {
+                OpenIddictConstants.Permissions.Endpoints.Token,
+                OpenIddictConstants.Permissions.GrantTypes.ClientCredentials,
+                OpenIddictConstants.Permissions.GrantTypes.Password
+            }
+        });
+    }
+}
